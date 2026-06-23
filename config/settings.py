@@ -434,6 +434,24 @@ class Settings(BaseSettings):
         return self
 
     @model_validator(mode="after")
+    def bind_nvidia_nim_vision_env(self) -> Settings:
+        """Apply ``NVIDIA_NIM_VISION_ENABLED`` env var to ``NimSettings``.
+
+        Env reading is centralised here (rather than via a Pydantic alias on
+        ``NimSettings.vision_enabled``) because ``NimSettings`` is a plain
+        ``BaseModel`` and would not auto-load the env. Mutation goes through
+        ``NimSettings.with_vision_enabled()`` to respect encapsulation.
+        """
+        env_value = _env_file_override(self.model_config, "NVIDIA_NIM_VISION_ENABLED")
+        if env_value is None:
+            env_value = os.environ.get("NVIDIA_NIM_VISION_ENABLED")
+        if env_value is not None:
+            self.nim = self.nim.with_vision_enabled(
+                env_value.lower() in ("true", "1", "yes")
+            )
+        return self
+
+    @model_validator(mode="after")
     def prefer_dotenv_anthropic_auth_token(self) -> Settings:
         """Let explicit .env auth config override stale shell/client tokens."""
         dotenv_value = _env_file_override(self.model_config, "ANTHROPIC_AUTH_TOKEN")

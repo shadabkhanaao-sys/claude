@@ -6,9 +6,21 @@ import pytest
 from httpx import Request, Response
 
 from config.nim import NimSettings
+from core.anthropic import VisionCapabilityProtocol
+from providers.base import ProviderConfig
 from providers.defaults import NVIDIA_NIM_DEFAULT_BASE
+from providers.exceptions import InvalidRequestError
 from providers.nvidia_nim import NvidiaNimProvider
-from providers.nvidia_nim.request import NIM_TOOL_ARGUMENT_ALIASES_KEY
+from providers.nvidia_nim.request import (
+    NIM_TOOL_ARGUMENT_ALIASES_KEY,
+    build_request_body,
+)
+
+
+class _NimVisionCapabilityStub:
+    """Stand-in for a vision-enabled capability; mirrors VisionCapabilityProtocol.enabled=True."""
+
+    enabled = True
 
 
 # Mock data classes
@@ -780,3 +792,89 @@ async def test_stream_response_bad_request_without_reasoning_budget_does_not_ret
     assert mock_create.await_count == 1
     assert any("Invalid request sent to provider" in event for event in events)
     assert any("message_stop" in event for event in events)
+
+
+# --- Task 7: NIM vision wiring tests ---
+
+
+def test_nvidia_nim_vision_capability_off_when_setting_false():
+    """NvidiaNimProvider with vision_enabled=False returns capability with enabled=False."""
+    nim = NimSettings(vision_enabled=False)
+    config = ProviderConfig(
+        base_url="http://localhost:8000",
+        api_key="test",
+    )
+    provider = NvidiaNimProvider(config, nim_settings=nim)
+    capability = provider._vision_capability()
+    assert capability.enabled is False
+
+
+def test_nvidia_nim_vision_capability_on_when_setting_true():
+    """NvidiaNimProvider with vision_enabled=True returns an enabled capability."""
+    nim = NimSettings(vision_enabled=True)
+    config = ProviderConfig(
+        base_url="http://localhost:8000",
+        api_key="test",
+    )
+    provider = NvidiaNimProvider(config, nim_settings=nim)
+    capability = provider._vision_capability()
+    assert isinstance(capability, VisionCapabilityProtocol)
+    assert capability.enabled is True
+
+
+def test_nvidia_nim_build_request_body_image_passes_through_when_vision_on():
+    """End-to-end: image block in request body survives when vision=ON."""
+    nim = NimSettings(vision_enabled=True, max_tokens=100)
+    req = MockRequest(
+        model="nvidia/nemotron",
+        messages=[
+            MockMessage(
+                "user",
+                [
+                    MockBlock(
+                        type="image",
+                        source={
+                            "type": "base64",
+                            "media_type": "image/png",
+                            "data": "abc",
+                        },
+                    ),
+                    MockBlock(type="text", text="describe"),
+                ],
+            )
+        ],
+    )
+    body = build_request_body(
+        req, nim, thinking_enabled=False, vision=_NimVisionCapabilityStub()
+    )
+    user_msgs = [m for m in body["messages"] if m["role"] == "user"]
+    image_parts = [
+        m
+        for m in user_msgs
+        if isinstance(m.get("content"), list)
+        and any(
+            p.get("type") == "image_url" for p in m["content"] if isinstance(p, dict)
+        )
+    ]
+    assert len(image_parts) >= 1
+
+
+def test_nvidia_nim_build_request_body_image_raises_when_vision_off():
+    """End-to-end: image block raises InvalidRequestError when vision=OFF."""
+    nim = NimSettings(vision_enabled=False)
+    req = MockRequest(
+        model="nvidia/nemotron",
+        messages=[
+            MockMessage(
+                "user",
+                [
+                    MockBlock(
+                        type="image",
+                        source={"type": "url", "url": "https://x.com/i.png"},
+                    ),
+                ],
+            )
+        ],
+    )
+    with pytest.raises(InvalidRequestError, match="image blocks"):
+        build_request_body(req, nim, thinking_enabled=False)

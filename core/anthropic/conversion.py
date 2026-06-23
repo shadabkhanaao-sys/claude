@@ -4,8 +4,9 @@ import json
 from copy import deepcopy
 from dataclasses import dataclass, field
 from enum import StrEnum
-from typing import Any
+from typing import Any, Protocol, runtime_checkable
 
+from loguru import logger
 from pydantic import BaseModel
 
 from .content import get_block_attr, get_block_type
@@ -14,6 +15,111 @@ from .utils import set_if_not_none
 
 class OpenAIConversionError(Exception):
     """Raised when Anthropic content cannot be converted to OpenAI chat without data loss."""
+
+
+@runtime_checkable
+class VisionCapabilityProtocol(Protocol):
+    """Protocol for vision capability injection into the converter."""
+
+    @property
+    def enabled(self) -> bool: ...
+
+
+class _VisionCapability:
+    """Concrete vision capability with an explicit enabled flag.
+
+    Used by providers that opt into image input; default transports return
+    :data:`NO_VISION` instead.
+    """
+
+    def __init__(self, *, enabled: bool) -> None:
+        self._enabled = enabled
+
+    @property
+    def enabled(self) -> bool:
+        return self._enabled
+
+
+NO_VISION: VisionCapabilityProtocol = _VisionCapability(enabled=False)
+
+
+def convert_anthropic_image_to_openai_image_url(block: Any) -> dict[str, Any]:
+    """Convert an Anthropic image block to an OpenAI ``image_url`` content-part dict.
+
+    Raises ``OpenAIConversionError`` for malformed or unsupported image blocks.
+    """
+    source = get_block_attr(block, "source", None)
+    if source is None:
+        raise OpenAIConversionError("image block missing source")
+
+    source_type = get_block_attr(source, "type", None)
+    if source_type == "base64":
+        media_type = get_block_attr(source, "media_type", None)
+        if not isinstance(media_type, str) or not media_type.startswith("image/"):
+            raise OpenAIConversionError(
+                f"image base64 source requires image/* media_type, got {media_type!r}"
+            )
+        data = get_block_attr(source, "data", None)
+        if not data:
+            raise OpenAIConversionError("image base64 source requires non-empty data")
+        return {
+            "type": "image_url",
+            "image_url": {"url": f"data:{media_type};base64,{data}"},
+        }
+    if source_type == "url":
+        url = get_block_attr(source, "url", None)
+        if not url:
+            raise OpenAIConversionError("image url source requires non-empty url")
+        return {
+            "type": "image_url",
+            "image_url": {"url": url},
+        }
+    raise OpenAIConversionError(f"unsupported image source.type={source_type!r}")
+
+
+_TOOL_RESULT_IMAGE_PLACEHOLDER_TEXT = (
+    "[attachment omitted: image stripped from tool_result for OpenAI compat]"
+)
+
+_TOOL_RESULT_IMAGE_PLACEHOLDER_BLOCK: dict[str, Any] = {
+    "type": "text",
+    "text": _TOOL_RESULT_IMAGE_PLACEHOLDER_TEXT,
+}
+
+
+def _strip_inner_images_from_tool_result(
+    raw_content: Any,
+) -> tuple[Any, int]:
+    """Replace ``image`` blocks inside a tool_result content list with a placeholder.
+
+    Returns ``(rewritten_content, count_of_replacements)``.  When ``raw_content``
+    is a plain string (the common case), this is a no-op returning ``(content, 0)``.
+    """
+    if not isinstance(raw_content, list):
+        return raw_content, 0
+
+    dropped = 0
+    rewritten: list[Any] = []
+    for item in raw_content:
+        if get_block_type(item) == "image":
+            rewritten.append(_TOOL_RESULT_IMAGE_PLACEHOLDER_BLOCK)
+            dropped += 1
+        else:
+            rewritten.append(item)
+    return rewritten, dropped
+
+
+def _build_user_multipart(parts: list[dict[str, Any]]) -> dict[str, Any]:
+    """Build a single ``role: user`` message from collected text/image content parts.
+
+    Visited by :meth:`AnthropicToOpenAIConverter._convert_user_message` to keep text
+    and image_url content parts in one message per the OpenAI vision spec. When all
+    parts are plain text, content is emitted as a joined string to match the
+    converter's text-only fast path and preserve compatibility with non-vision providers.
+    """
+    if all(p.get("type") == "text" for p in parts):
+        return {"role": "user", "content": "\n".join(p["text"] for p in parts)}
+    return {"role": "user", "content": list(parts)}
 
 
 class ReasoningReplayMode(StrEnum):
@@ -173,6 +279,7 @@ class AnthropicToOpenAIConverter:
         messages: list[Any],
         *,
         reasoning_replay: ReasoningReplayMode = ReasoningReplayMode.THINK_TAGS,
+        vision: VisionCapabilityProtocol = NO_VISION,
     ) -> list[dict[str, Any]]:
         result: list[dict[str, Any]] = []
         pending: _PendingAfterTools | None = None
@@ -253,19 +360,21 @@ class AnthropicToOpenAIConverter:
                             pending = None
                             result.extend(
                                 AnthropicToOpenAIConverter._convert_user_message(
-                                    content
+                                    content, vision=vision
                                 )
                             )
                         else:
                             pieces = AnthropicToOpenAIConverter._convert_user_message_with_injection(
-                                content, pending
+                                content, pending, vision=vision
                             )
                             result.extend(pieces["messages"])
                             if pieces["cleared_pending"]:
                                 pending = None
                     else:
                         result.extend(
-                            AnthropicToOpenAIConverter._convert_user_message(content)
+                            AnthropicToOpenAIConverter._convert_user_message(
+                                content, vision=vision
+                            )
                         )
             else:
                 if role == "user" and pending is not None and pending.needs_deferred():
@@ -404,38 +513,56 @@ class AnthropicToOpenAIConverter:
 
     @staticmethod
     def _convert_user_message_with_injection(
-        content: list[Any], pending: _PendingAfterTools
+        content: list[Any],
+        pending: _PendingAfterTools,
+        *,
+        vision: VisionCapabilityProtocol = NO_VISION,
     ) -> dict[str, Any]:
         """Convert user list blocks, emitting deferred assistant after all tool results."""
         if not pending.needs_deferred() or not pending.remaining_tool_ids:
             return {
-                "messages": AnthropicToOpenAIConverter._convert_user_message(content),
+                "messages": AnthropicToOpenAIConverter._convert_user_message(
+                    content, vision=vision
+                ),
                 "cleared_pending": False,
             }
 
         result: list[dict[str, Any]] = []
-        text_parts: list[str] = []
+        parts: list[dict[str, Any]] = []
         cleared = False
 
-        def flush_text() -> None:
-            if text_parts:
-                result.append({"role": "user", "content": "\n".join(text_parts)})
-                text_parts.clear()
+        def flush_parts() -> None:
+            if parts:
+                result.append(_build_user_multipart(parts))
+                parts.clear()
 
         for block in content:
             block_type = get_block_type(block)
             if block_type == "text":
-                text_parts.append(get_block_attr(block, "text", ""))
+                text = get_block_attr(block, "text", "")
+                if text:
+                    parts.append({"type": "text", "text": text})
             elif block_type == "image":
-                raise OpenAIConversionError(
-                    "User message image blocks are not supported for OpenAI chat "
-                    "conversion; use a vision-capable native Anthropic provider or "
-                    "extend the converter."
-                )
+                if not vision.enabled:
+                    raise OpenAIConversionError(
+                        "User message image blocks are not supported for OpenAI chat "
+                        "conversion; use a vision-capable native Anthropic provider or "
+                        "extend the converter."
+                    )
+                parts.append(convert_anthropic_image_to_openai_image_url(block))
             elif block_type == "tool_result":
-                flush_text()
-                tool_content = get_block_attr(block, "content", "")
-                serialized = _serialize_tool_result_content(tool_content)
+                flush_parts()
+                raw_content = get_block_attr(block, "content", "")
+                new_content, dropped = _strip_inner_images_from_tool_result(raw_content)
+                if dropped > 0:
+                    logger.warning(
+                        "OPENAI_CONVERSION: dropped {} image(s) from tool_result content "
+                        "(vision={}) — OpenAI tool messages only carry string content; "
+                        "use a native Anthropic provider if image-in-tool_result is required.",
+                        dropped,
+                        vision.enabled,
+                    )
+                serialized = _serialize_tool_result_content(new_content)
                 tuid = get_block_attr(block, "tool_use_id")
                 tuid_s = str(tuid) if tuid is not None else ""
                 result.append(
@@ -458,34 +585,54 @@ class AnthropicToOpenAIConverter:
             else:
                 pass
 
-        flush_text()
+        flush_parts()
         return {"messages": result, "cleared_pending": cleared}
 
     @staticmethod
-    def _convert_user_message(content: list[Any]) -> list[dict[str, Any]]:
+    def _convert_user_message(
+        content: list[Any],
+        *,
+        vision: VisionCapabilityProtocol = NO_VISION,
+    ) -> list[dict[str, Any]]:
         result: list[dict[str, Any]] = []
-        text_parts: list[str] = []
+        # Mixed text/image parts collected into a single multi-part content array.
+        # Emitted as one OpenAI ``role: user`` message when non-empty, matching the
+        # OpenAI vision spec rather than splitting into consecutive user messages.
+        parts: list[dict[str, Any]] = []
 
-        def flush_text() -> None:
-            if text_parts:
-                result.append({"role": "user", "content": "\n".join(text_parts)})
-                text_parts.clear()
+        def flush_parts() -> None:
+            if parts:
+                result.append(_build_user_multipart(parts))
+                parts.clear()
 
         for block in content:
             block_type = get_block_type(block)
 
             if block_type == "text":
-                text_parts.append(get_block_attr(block, "text", ""))
+                text = get_block_attr(block, "text", "")
+                if text:
+                    parts.append({"type": "text", "text": text})
             elif block_type == "image":
-                raise OpenAIConversionError(
-                    "User message image blocks are not supported for OpenAI chat "
-                    "conversion; use a vision-capable native Anthropic provider or "
-                    "extend the converter."
-                )
+                if not vision.enabled:
+                    raise OpenAIConversionError(
+                        "User message image blocks are not supported for OpenAI chat "
+                        "conversion; use a vision-capable native Anthropic provider or "
+                        "extend the converter."
+                    )
+                parts.append(convert_anthropic_image_to_openai_image_url(block))
             elif block_type == "tool_result":
-                flush_text()
-                tool_content = get_block_attr(block, "content", "")
-                serialized = _serialize_tool_result_content(tool_content)
+                flush_parts()
+                raw_content = get_block_attr(block, "content", "")
+                new_content, dropped = _strip_inner_images_from_tool_result(raw_content)
+                if dropped > 0:
+                    logger.warning(
+                        "OPENAI_CONVERSION: dropped {} image(s) from tool_result content "
+                        "(vision={}) — OpenAI tool messages only carry string content; "
+                        "use a native Anthropic provider if image-in-tool_result is required.",
+                        dropped,
+                        vision.enabled,
+                    )
+                serialized = _serialize_tool_result_content(new_content)
                 result.append(
                     {
                         "role": "tool",
@@ -494,7 +641,7 @@ class AnthropicToOpenAIConverter:
                     }
                 )
 
-        flush_text()
+        flush_parts()
         return result
 
     @staticmethod
@@ -550,12 +697,14 @@ def build_base_request_body(
     *,
     default_max_tokens: int | None = None,
     reasoning_replay: ReasoningReplayMode = ReasoningReplayMode.THINK_TAGS,
+    vision: VisionCapabilityProtocol = NO_VISION,
 ) -> dict[str, Any]:
     """Build the common parts of an OpenAI-format request body."""
     _openai_reject_native_only_top_level_fields(request_data)
     messages = AnthropicToOpenAIConverter.convert_messages(
         request_data.messages,
         reasoning_replay=reasoning_replay,
+        vision=vision,
     )
 
     system = getattr(request_data, "system", None)

@@ -2,10 +2,14 @@
 
 from .content import extract_text_from_content, get_block_attr, get_block_type
 from .conversion import (
+    NO_VISION,
     AnthropicToOpenAIConverter,
     OpenAIConversionError,
     ReasoningReplayMode,
+    VisionCapabilityProtocol,
+    _VisionCapability,  # noqa: F401  --  re-exported for provider vision wiring
     build_base_request_body,
+    convert_anthropic_image_to_openai_image_url,
 )
 from .errors import (
     append_request_id,
@@ -21,6 +25,7 @@ from .tools import HeuristicToolParser
 from .utils import set_if_not_none
 
 __all__ = [
+    "NO_VISION",
     "AnthropicToOpenAIConverter",
     "ContentBlockManager",
     "ContentChunk",
@@ -30,8 +35,10 @@ __all__ = [
     "ReasoningReplayMode",
     "SSEBuilder",
     "ThinkTagParser",
+    "VisionCapabilityProtocol",
     "append_request_id",
     "build_base_request_body",
+    "convert_anthropic_image_to_openai_image_url",
     "extract_text_from_content",
     "format_sse_event",
     "format_user_error_preview",
