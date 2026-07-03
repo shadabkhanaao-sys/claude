@@ -9,7 +9,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Literal
 
-TransportType = Literal["openai_chat", "anthropic_messages"]
+TransportType = Literal["openai_chat", "anthropic_messages", "kiro_eventstream"]
 
 # Default upstream base URLs (also re-exported via :mod:`providers.defaults`)
 NVIDIA_NIM_DEFAULT_BASE = "https://integrate.api.nvidia.com/v1"
@@ -36,6 +36,8 @@ ZAI_DEFAULT_BASE = "https://api.z.ai/api/anthropic/v1"
 GEMINI_DEFAULT_BASE = "https://generativelanguage.googleapis.com/v1beta/openai/"
 GROQ_DEFAULT_BASE = "https://api.groq.com/openai/v1"
 CEREBRAS_DEFAULT_BASE = "https://api.cerebras.ai/v1"
+KIRO_DEFAULT_BASE = "https://runtime.us-east-1.kiro.dev"
+COMBO_DEFAULT_BASE = "https://api.openai.com/v1"
 
 
 @dataclass(frozen=True, slots=True)
@@ -245,6 +247,26 @@ PROVIDER_CATALOG: dict[str, ProviderDescriptor] = {
             "native_anthropic",
             "rate_limit",
         ),
+    ),
+    "kiro": ProviderDescriptor(
+        provider_id="kiro",
+        display_name="Kiro",
+        transport_type="kiro_eventstream",
+        credential_env="KIRO_ACCESS_TOKEN",
+        credential_url="https://kiro.ai",
+        credential_attr="kiro_access_token",
+        default_base_url=KIRO_DEFAULT_BASE,
+        capabilities=("chat", "streaming", "tools", "thinking", "rate_limit"),
+    ),
+    "default_combo": ProviderDescriptor(
+        provider_id="default_combo",
+        display_name="Default Combo",
+        transport_type="openai_chat",
+        static_credential="combo",
+        default_base_url=COMBO_DEFAULT_BASE,
+        base_url_attr="combo_base_url",
+        proxy_attr="combo_proxy",
+        capabilities=("chat", "streaming", "tools", "thinking", "rate_limit"),
     ),
     "lmstudio": ProviderDescriptor(
         provider_id="lmstudio",
