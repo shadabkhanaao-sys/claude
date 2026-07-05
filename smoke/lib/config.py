@@ -52,13 +52,14 @@ PROVIDER_SMOKE_DEFAULT_MODELS: dict[str, str] = {
     "llamacpp": "llamacpp/local-model",
     "ollama": "ollama/llama3.1",
     "wafer": "wafer/DeepSeek-V4-Pro",
+    "minimax": "minimax/MiniMax-M3",
     "opencode": "opencode/gpt-5.3-codex",
     "opencode_go": "opencode_go/minimax-m2.7",
     "zai": "zai/glm-5.1",
     "gemini": "gemini/models/gemini-3.1-flash-lite",
     "groq": "groq/llama-3.3-70b-versatile",
     "cerebras": "cerebras/llama3.1-8b",
-    "cloudflare": "cloudflare/anthropic/claude-sonnet-4-5",
+    "cloudflare": "cloudflare/@cf/moonshotai/kimi-k2.6",
 }
 
 NVIDIA_NIM_CLI_DEFAULT_MODELS: tuple[str, ...] = (
@@ -245,6 +246,8 @@ class SmokeConfig:
             return bool(self.settings.ollama_base_url.strip())
         if provider == "wafer":
             return bool(self.settings.wafer_api_key.strip())
+        if provider == "minimax":
+            return bool(self.settings.minimax_api_key.strip())
         if provider == "fireworks":
             return bool(self.settings.fireworks_api_key.strip())
         if provider == "opencode":

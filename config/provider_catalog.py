@@ -16,6 +16,7 @@ NVIDIA_NIM_DEFAULT_BASE = "https://integrate.api.nvidia.com/v1"
 # Moonshot Kimi Anthropic-compatible Messages API (POST …/messages).
 KIMI_DEFAULT_BASE = "https://api.moonshot.ai/anthropic/v1"
 WAFER_DEFAULT_BASE = "https://pass.wafer.ai/v1"
+MINIMAX_DEFAULT_BASE = "https://api.minimax.io/anthropic/v1"
 # DeepSeek Chat Completions API; cache usage is reported on this endpoint.
 DEEPSEEK_DEFAULT_BASE = "https://api.deepseek.com"
 FIREWORKS_DEFAULT_BASE = "https://api.fireworks.ai/inference/v1"
@@ -173,6 +174,24 @@ PROVIDER_CATALOG: dict[str, ProviderDescriptor] = {
             "native_anthropic",
         ),
     ),
+    "minimax": ProviderDescriptor(
+        provider_id="minimax",
+        display_name="MiniMax",
+        transport_type="anthropic_messages",
+        credential_env="MINIMAX_API_KEY",
+        credential_url="https://platform.minimax.io/user-center/basic-information/interface-key",
+        credential_attr="minimax_api_key",
+        default_base_url=MINIMAX_DEFAULT_BASE,
+        proxy_attr="minimax_proxy",
+        capabilities=(
+            "chat",
+            "streaming",
+            "tools",
+            "thinking",
+            "native_anthropic",
+            "rate_limit",
+        ),
+    ),
     "cerebras": ProviderDescriptor(
         provider_id="cerebras",
         display_name="Cerebras",
@@ -216,7 +235,7 @@ PROVIDER_CATALOG: dict[str, ProviderDescriptor] = {
     "cloudflare": ProviderDescriptor(
         provider_id="cloudflare",
         display_name="Cloudflare",
-        transport_type="anthropic_messages",
+        transport_type="openai_chat",
         credential_env="CLOUDFLARE_API_TOKEN",
         credential_url="https://dash.cloudflare.com/profile/api-tokens",
         credential_attr="cloudflare_api_token",
@@ -227,7 +246,6 @@ PROVIDER_CATALOG: dict[str, ProviderDescriptor] = {
             "streaming",
             "tools",
             "thinking",
-            "native_anthropic",
             "rate_limit",
         ),
     ),
@@ -271,12 +289,12 @@ PROVIDER_CATALOG: dict[str, ProviderDescriptor] = {
     "lmstudio": ProviderDescriptor(
         provider_id="lmstudio",
         display_name="LM Studio",
-        transport_type="anthropic_messages",
+        transport_type="openai_chat",
         static_credential="lm-studio",
         default_base_url=LMSTUDIO_DEFAULT_BASE,
         base_url_attr="lm_studio_base_url",
         proxy_attr="lmstudio_proxy",
-        capabilities=("chat", "streaming", "tools", "native_anthropic", "local"),
+        capabilities=("chat", "streaming", "tools", "local"),
     ),
     "llamacpp": ProviderDescriptor(
         provider_id="llamacpp",
@@ -307,8 +325,9 @@ PROVIDER_CATALOG: dict[str, ProviderDescriptor] = {
 }
 
 # Key order:
-# NVIDIA NIM first (README default), DeepSeek fourth, Wafer ninth / Kimi tenth; then cerebras /
-# groq / fireworks / Cloudflare overlap; remainder and locals last per project plan (
+# NVIDIA NIM first (README default), DeepSeek fourth, Wafer ninth / Kimi tenth;
+# MiniMax follows the native Anthropic remotes; then cerebras / groq / fireworks /
+# Cloudflare overlap; remainder and locals last per project plan (
 # github.com/cheahjs/free-llm-api-resources Free Providers TOC as rough guide beyond fixed slots).
 # ``SUPPORTED_PROVIDER_IDS`` inherits this insertion order for UI and error-message listing.
 SUPPORTED_PROVIDER_IDS: tuple[str, ...] = tuple(PROVIDER_CATALOG.keys())

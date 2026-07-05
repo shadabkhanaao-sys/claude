@@ -355,7 +355,15 @@ Gemini thought signatures, NIM tool-schema aliases and retry downgrades, or
 DeepSeek attachment/tool/thinking compatibility. DeepSeek intentionally uses its
 OpenAI-compatible Chat Completions endpoint because that is the endpoint that
 reports prompt-cache hit/miss counters; the provider maps those counters back
-into Anthropic usage fields for Claude-compatible clients.
+into Anthropic usage fields for Claude-compatible clients. Cloudflare uses its
+account-scoped Workers AI OpenAI-compatible Chat Completions endpoint for
+`@cf/...` model IDs, while account ID composition, model search, and
+Cloudflare-specific reasoning deltas stay in the Cloudflare provider client.
+MiniMax uses its Anthropic-compatible Messages endpoint; its provider client owns
+the MiniMax-specific `adaptive` thinking request shape.
+NIM reasoning budget control is also treated as a provider-owned best-effort
+downgrade: if an upstream NIM deployment rejects explicit budget control, FCC
+retries without the budget while preserving thinking enablement.
 
 Shared provider responsibilities include upstream rate limiting, model listing,
 safe error mapping, transport cleanup, thinking/tool handling, retry or recovery

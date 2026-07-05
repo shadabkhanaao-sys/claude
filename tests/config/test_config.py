@@ -284,6 +284,16 @@ class TestSettings:
         settings = Settings()
         assert settings.wafer_api_key == "wafer-key"
 
+    def test_minimax_settings_from_env(self, monkeypatch):
+        """MiniMax key and proxy env vars load into settings."""
+        from config.settings import Settings
+
+        monkeypatch.setenv("MINIMAX_API_KEY", "minimax-key")
+        monkeypatch.setenv("MINIMAX_PROXY", "http://proxy.test:8080")
+        settings = Settings()
+        assert settings.minimax_api_key == "minimax-key"
+        assert settings.minimax_proxy == "http://proxy.test:8080"
+
     def test_cloudflare_settings_from_env(self, monkeypatch):
         """Cloudflare token, account, and proxy env vars load into settings."""
         from config.settings import Settings
@@ -684,8 +694,8 @@ class TestPerModelMapping:
             ({"MODEL": "deepseek/deepseek-chat"}, "deepseek/deepseek-chat", None),
             ({"MODEL": "wafer/DeepSeek-V4-Pro"}, "wafer/DeepSeek-V4-Pro", None),
             (
-                {"MODEL": "cloudflare/anthropic/claude-sonnet-4-5"},
-                "cloudflare/anthropic/claude-sonnet-4-5",
+                {"MODEL": "cloudflare/@cf/moonshotai/kimi-k2.6"},
+                "cloudflare/@cf/moonshotai/kimi-k2.6",
                 None,
             ),
             ({"MODEL": "lmstudio/qwen2.5-7b"}, "lmstudio/qwen2.5-7b", None),
@@ -869,9 +879,9 @@ class TestPerModelMapping:
         assert parse_provider_type("llamacpp/model") == "llamacpp"
         assert parse_provider_type("ollama/llama3.1") == "ollama"
         assert parse_provider_type("wafer/DeepSeek-V4-Pro") == "wafer"
+        assert parse_provider_type("minimax/MiniMax-M3") == "minimax"
         assert (
-            parse_provider_type("cloudflare/anthropic/claude-sonnet-4-5")
-            == "cloudflare"
+            parse_provider_type("cloudflare/@cf/moonshotai/kimi-k2.6") == "cloudflare"
         )
         assert parse_provider_type("gemini/models/gemini-3.1-flash-lite") == "gemini"
         assert parse_provider_type("groq/llama-3.3-70b-versatile") == "groq"
@@ -892,9 +902,10 @@ class TestPerModelMapping:
         assert parse_model_name("llamacpp/model") == "model"
         assert parse_model_name("ollama/llama3.1") == "llama3.1"
         assert parse_model_name("wafer/DeepSeek-V4-Pro") == "DeepSeek-V4-Pro"
+        assert parse_model_name("minimax/MiniMax-M3") == "MiniMax-M3"
         assert (
-            parse_model_name("cloudflare/anthropic/claude-sonnet-4-5")
-            == "anthropic/claude-sonnet-4-5"
+            parse_model_name("cloudflare/@cf/moonshotai/kimi-k2.6")
+            == "@cf/moonshotai/kimi-k2.6"
         )
         assert (
             parse_model_name("gemini/models/gemini-3.1-flash-lite")
