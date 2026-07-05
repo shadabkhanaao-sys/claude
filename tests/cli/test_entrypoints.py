@@ -463,10 +463,13 @@ def test_resolve_auto_compact_window_uses_lmstudio_loaded_context(
             return None
 
         def json(self) -> dict:
+            # The not-loaded decoy uses a *small* context so that if the
+            # state=="loaded" filter ever broke, min() would pick it up and the
+            # 28960 assertion would fail — keeping the filter genuinely covered.
             return {
                 "data": [
                     {"state": "loaded", "loaded_context_length": 40960},
-                    {"state": "not-loaded", "loaded_context_length": 999999},
+                    {"state": "not-loaded", "loaded_context_length": 2048},
                 ]
             }
 
@@ -478,6 +481,42 @@ def test_resolve_auto_compact_window_uses_lmstudio_loaded_context(
 
     # max(8192, min(0.85 * 40960, 40960 - 12000)) == 28960
     assert resolve_auto_compact_window(settings) == "28960"
+
+
+def test_resolve_auto_compact_window_sizes_to_smallest_loaded_context(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """With several models loaded at different contexts, the single global
+    window must fit the SMALLEST — a request routed to it must still compact
+    before LM Studio truncates. Sizing to the largest leaves it unprotected."""
+    from cli.launchers.claude import resolve_auto_compact_window
+
+    settings = Settings.model_construct(
+        host="0.0.0.0",
+        port=8082,
+        anthropic_auth_token="freecc",
+        model="lmstudio/mistralai/devstral-small-2-2512",
+        lm_studio_base_url="http://localhost:1234/v1",
+    )
+
+    class _FakeResponse:
+        def raise_for_status(self) -> None:
+            return None
+
+        def json(self) -> dict:
+            return {
+                "data": [
+                    {"state": "loaded", "loaded_context_length": 4096},
+                    {"state": "loaded", "loaded_context_length": 130048},
+                ]
+            }
+
+    monkeypatch.setattr(
+        "cli.launchers.claude.httpx.get", lambda url, timeout: _FakeResponse()
+    )
+
+    # min loaded = 4096; window clamps to it, not 98548 (which max() would give).
+    assert resolve_auto_compact_window(settings) == "4096"
 
 
 def test_resolve_auto_compact_window_uses_lmstudio_override_under_non_lmstudio_default(

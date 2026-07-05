@@ -130,7 +130,13 @@ def resolve_auto_compact_window(settings: Settings) -> str:
         ]
         if not loaded:
             return CLAUDE_CODE_AUTO_COMPACT_WINDOW
-        context_length = max(loaded)
+        # Use the SMALLEST loaded context, not the largest: the compact window
+        # is a single global env var applied to every request, so if several
+        # models are loaded at different contexts (e.g. a small haiku-tier model
+        # and a large opus-tier one), a request routed to the smallest one must
+        # still compact before it truncates. Sizing to max() would leave the
+        # small model unprotected — the exact silent truncation this prevents.
+        context_length = min(loaded)
         window = max(8192, min(int(context_length * 0.85), context_length - 12000))
         # The 8192 floor above is meant to avoid compacting too early on modest
         # contexts, not to override a model loaded with an even smaller context
