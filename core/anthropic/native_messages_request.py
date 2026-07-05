@@ -185,6 +185,84 @@ def sanitize_native_messages_thinking_policy(
     return sanitized_messages
 
 
+def _fold_blocks_into_tool_result(target: dict[str, Any], extras: list[Any]) -> None:
+    """Merge non-tool_result blocks into one tool_result's content in place."""
+    text_parts = [
+        block["text"]
+        for block in extras
+        if isinstance(block, dict)
+        and block.get("type") == "text"
+        and isinstance(block.get("text"), str)
+    ]
+    other_blocks = [
+        block
+        for block in extras
+        if not (isinstance(block, dict) and block.get("type") == "text")
+    ]
+    content = target.get("content")
+    if isinstance(content, str) and not other_blocks:
+        joined = "\n\n".join(part for part in [content, *text_parts] if part)
+        target["content"] = joined
+        return
+    # Normalize to list form when blocks (e.g. images) must be preserved.
+    normalized: list[Any] = []
+    if isinstance(content, str):
+        if content:
+            normalized.append({"type": "text", "text": content})
+    elif isinstance(content, list):
+        normalized.extend(content)
+    normalized.extend({"type": "text", "text": part} for part in text_parts)
+    normalized.extend(other_blocks)
+    target["content"] = normalized
+
+
+def sanitize_tool_result_user_messages(messages: Any) -> Any:
+    """Make user turns that carry a tool_result contain only tool_results.
+
+    Some local chat templates (Mistral/devstral via llama.cpp) fail to render
+    a user turn that mixes a ``tool_result`` block with any other block — e.g.
+    when Claude Code appends a reminder ``text`` block to the same turn as a
+    tool result. Real Anthropic accepts the mixed turn; these templates raise
+    "roles must alternate ... except for tool calls and results". Fold the
+    non-tool_result blocks into the last tool_result so the turn is
+    tool_result-only, which every template renders and which the model reads
+    identically.
+    """
+    if not isinstance(messages, list):
+        return messages
+
+    sanitized_messages: list[Any] = []
+    for message in messages:
+        if not isinstance(message, dict) or message.get("role") != "user":
+            sanitized_messages.append(message)
+            continue
+        content = message.get("content")
+        if not isinstance(content, list):
+            sanitized_messages.append(message)
+            continue
+        tool_results = [
+            block
+            for block in content
+            if isinstance(block, dict) and block.get("type") == "tool_result"
+        ]
+        extras = [
+            block
+            for block in content
+            if not (isinstance(block, dict) and block.get("type") == "tool_result")
+        ]
+        if not tool_results or not extras:
+            sanitized_messages.append(message)
+            continue
+
+        new_results = [dict(block) for block in tool_results]
+        _fold_blocks_into_tool_result(new_results[-1], extras)
+        sanitized_message = dict(message)
+        sanitized_message["content"] = new_results
+        sanitized_messages.append(sanitized_message)
+
+    return sanitized_messages
+
+
 def _normalize_system_prompt_for_openrouter(system: Any) -> Any:
     """Flatten Claude SDK system blocks for OpenRouter's native endpoint."""
     if not isinstance(system, list):
@@ -240,6 +318,7 @@ def build_base_native_anthropic_request_body(
             body["messages"],
             thinking_enabled=thinking_enabled,
         )
+        body["messages"] = sanitize_tool_result_user_messages(body["messages"])
 
     return body
 
