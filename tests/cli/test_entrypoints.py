@@ -480,6 +480,39 @@ def test_resolve_auto_compact_window_uses_lmstudio_loaded_context(
     assert resolve_auto_compact_window(settings) == "28960"
 
 
+def test_resolve_auto_compact_window_uses_lmstudio_override_under_non_lmstudio_default(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Routing sends a request through MODEL_OPUS/SONNET/HAIKU when set, so an
+    LM Studio override under a non-LM-Studio default must still get a truthful
+    window — otherwise override requests miss compaction and truncate."""
+    from cli.launchers.claude import resolve_auto_compact_window
+
+    settings = Settings.model_construct(
+        host="0.0.0.0",
+        port=8082,
+        anthropic_auth_token="freecc",
+        model="nvidia_nim/test-model",
+        model_haiku="lmstudio/mistralai/devstral-small-2-2512",
+        lm_studio_base_url="http://localhost:1234/v1",
+    )
+
+    class _FakeResponse:
+        def raise_for_status(self) -> None:
+            return None
+
+        def json(self) -> dict:
+            return {"data": [{"state": "loaded", "loaded_context_length": 40960}]}
+
+    def _fake_get(url: str, timeout: float) -> _FakeResponse:
+        assert url == "http://localhost:1234/api/v0/models"
+        return _FakeResponse()
+
+    monkeypatch.setattr("cli.launchers.claude.httpx.get", _fake_get)
+
+    assert resolve_auto_compact_window(settings) == "28960"
+
+
 def test_resolve_auto_compact_window_clamps_to_a_small_loaded_context(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

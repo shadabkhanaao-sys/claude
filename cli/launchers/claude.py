@@ -12,7 +12,7 @@ from cli.claude_env import (
     CLAUDE_CODE_AUTO_COMPACT_WINDOW,
     claude_auth_token,
 )
-from config.model_refs import parse_provider_type
+from config.model_refs import configured_chat_model_refs
 from config.settings import Settings, get_settings
 
 from .common import preflight_proxy, resolve_client_binary, run_client_process
@@ -100,11 +100,22 @@ def resolve_auto_compact_window(settings: Settings) -> str:
 
     The static default (190000) is far above a locally-loaded context like
     45k/130k, so Claude Code never compacts before the local ceiling and LM
-    Studio silently truncates the stream. When LM Studio is the provider, read
-    the actually-loaded context length and reserve headroom for one large
-    tool-result turn plus generation.
+    Studio silently truncates the stream. When LM Studio is a configured
+    provider, read the actually-loaded context length and reserve headroom for
+    one large tool-result turn plus generation.
+
+    Checks every configured model slot (MODEL and the MODEL_OPUS/SONNET/HAIKU
+    overrides), not just MODEL: routing sends a Claude request through whichever
+    override matches its tier, so an LM Studio override under a non-LM-Studio
+    default must still get a truthful window. The compact window is a single
+    global env var with no per-tier control, so if *any* slot is LM Studio we
+    size to its ceiling — missing compaction there causes a silent truncation,
+    whereas the same window applied to a large-context cloud model only compacts
+    slightly early, which is harmless.
     """
-    if parse_provider_type(settings.model) != "lmstudio":
+    if not any(
+        ref.provider_id == "lmstudio" for ref in configured_chat_model_refs(settings)
+    ):
         return CLAUDE_CODE_AUTO_COMPACT_WINDOW
     try:
         root = settings.lm_studio_base_url.rstrip("/")
