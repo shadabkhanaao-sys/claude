@@ -4,13 +4,16 @@ import os
 import sys
 from collections.abc import Mapping, Sequence
 
+import httpx
+
 from api.admin_urls import local_proxy_root_url
 from cli.claude_env import (
     CLAUDE_BINARY_NAME,
     CLAUDE_CODE_AUTO_COMPACT_WINDOW,
     claude_auth_token,
 )
-from config.settings import get_settings
+from config.model_refs import parse_provider_type
+from config.settings import Settings, get_settings
 
 from .common import preflight_proxy, resolve_client_binary, run_client_process
 
@@ -44,6 +47,7 @@ def launch(argv: Sequence[str] | None = None) -> None:
             proxy_root_url=proxy_root_url,
             auth_token=settings.anthropic_auth_token,
             base_env=os.environ,
+            auto_compact_window=resolve_auto_compact_window(settings),
         ),
         binary_name=binary_name,
         display_name=_DISPLAY_NAME,
@@ -65,21 +69,81 @@ def build_claude_launcher_command(
     return [binary_path, *argv]
 
 
+# Session-identity vars injected by a live Claude Code session. When fcc-claude
+# is invoked from inside one (e.g. an agent's Bash tool), the nested claude.exe
+# inherits these, decides it is a child session with host-managed OAuth, and
+# ignores ANTHROPIC_AUTH_TOKEN entirely — every request then 401s against the
+# proxy. fcc-claude's contract is a fresh standalone session pointed at the
+# local proxy, so all inherited session/harness vars must be dropped; the two
+# CLAUDE_CODE_* vars the launcher itself needs are re-set explicitly below.
+_SESSION_ENV_VARS = frozenset(
+    {
+        "CLAUDECODE",
+        "CLAUDE_AGENT_SDK_VERSION",
+        "CLAUDE_EFFORT",
+        "AI_AGENT",
+        "BAGGAGE",
+    }
+)
+
+
+def _is_inherited_session_var(key: str) -> bool:
+    return (
+        key in _SESSION_ENV_VARS
+        or key.startswith("ANTHROPIC_")
+        or key.startswith("CLAUDE_CODE_")
+    )
+
+
+def resolve_auto_compact_window(settings: Settings) -> str:
+    """Match Claude Code's auto-compact window to the loaded local model.
+
+    The static default (190000) is far above a locally-loaded context like
+    45k/130k, so Claude Code never compacts before the local ceiling and LM
+    Studio silently truncates the stream. When LM Studio is the provider, read
+    the actually-loaded context length and reserve headroom for one large
+    tool-result turn plus generation.
+    """
+    if parse_provider_type(settings.model) != "lmstudio":
+        return CLAUDE_CODE_AUTO_COMPACT_WINDOW
+    try:
+        root = settings.lm_studio_base_url.rstrip("/")
+        root = root[: -len("/v1")] if root.endswith("/v1") else root
+        response = httpx.get(f"{root}/api/v0/models", timeout=2.0)
+        response.raise_for_status()
+        loaded = [
+            model.get("loaded_context_length")
+            for model in response.json().get("data", [])
+            if model.get("state") == "loaded"
+            and isinstance(model.get("loaded_context_length"), int)
+        ]
+        if not loaded:
+            return CLAUDE_CODE_AUTO_COMPACT_WINDOW
+        context_length = max(loaded)
+        window = max(8192, min(int(context_length * 0.85), context_length - 12000))
+        return str(window)
+    except Exception:
+        return CLAUDE_CODE_AUTO_COMPACT_WINDOW
+
+
 def build_claude_launcher_env(
     *,
     proxy_root_url: str,
     auth_token: str,
     base_env: Mapping[str, str],
+    auto_compact_window: str | None = None,
 ) -> dict[str, str]:
     """Return a Claude Code environment that targets the local proxy."""
 
     env = {
         key: value
         for key, value in base_env.items()
-        if not key.startswith("ANTHROPIC_")
+        if not _is_inherited_session_var(key)
     }
     env["ANTHROPIC_BASE_URL"] = proxy_root_url
     env["CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY"] = "1"
-    env["CLAUDE_CODE_AUTO_COMPACT_WINDOW"] = CLAUDE_CODE_AUTO_COMPACT_WINDOW
+    env["CLAUDE_CODE_AUTO_COMPACT_WINDOW"] = (
+        auto_compact_window or CLAUDE_CODE_AUTO_COMPACT_WINDOW
+    )
     env["ANTHROPIC_AUTH_TOKEN"] = claude_auth_token(auth_token)
     return env

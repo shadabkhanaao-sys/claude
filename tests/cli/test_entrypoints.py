@@ -392,6 +392,118 @@ def test_claude_child_env_uses_sentinel_for_blank_configured_auth_token() -> Non
     assert "ANTHROPIC_API_KEY" not in env
 
 
+def test_claude_child_env_strips_inherited_session_identity_vars() -> None:
+    """A nested fcc-claude invocation (e.g. from inside an agent's shell) must
+    not inherit the parent Claude Code session's identity vars: doing so makes
+    the child process see itself as a host-managed child session and ignore
+    ANTHROPIC_AUTH_TOKEN entirely, 401ing every request against the proxy."""
+    from cli.launchers.claude import build_claude_launcher_env
+
+    env = build_claude_launcher_env(
+        proxy_root_url="http://127.0.0.1:8082",
+        auth_token="proxy-token",
+        base_env={
+            "PATH": "keep",
+            "CLAUDECODE": "1",
+            "CLAUDE_CODE_CHILD_SESSION": "1",
+            "CLAUDE_CODE_SDK_HAS_HOST_AUTH_REFRESH": "1",
+            "CLAUDE_CODE_OAUTH_SCOPES": "user:inference",
+            "CLAUDE_CODE_SESSION_ID": "abc-123",
+            "CLAUDE_AGENT_SDK_VERSION": "0.3.0",
+            "CLAUDE_EFFORT": "high",
+            "AI_AGENT": "claude-code",
+            "BAGGAGE": "sentry-trace=1",
+        },
+    )
+
+    assert env["PATH"] == "keep"
+    for stripped_key in (
+        "CLAUDECODE",
+        "CLAUDE_CODE_CHILD_SESSION",
+        "CLAUDE_CODE_SDK_HAS_HOST_AUTH_REFRESH",
+        "CLAUDE_CODE_OAUTH_SCOPES",
+        "CLAUDE_CODE_SESSION_ID",
+        "CLAUDE_AGENT_SDK_VERSION",
+        "CLAUDE_EFFORT",
+        "AI_AGENT",
+        "BAGGAGE",
+    ):
+        assert stripped_key not in env
+    # The launcher still re-sets its own two CLAUDE_CODE_* vars explicitly.
+    assert env["CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY"] == "1"
+    assert env["CLAUDE_CODE_AUTO_COMPACT_WINDOW"] == "190000"
+
+
+def test_resolve_auto_compact_window_falls_back_for_non_lmstudio_provider() -> None:
+    from cli.launchers.claude import (
+        CLAUDE_CODE_AUTO_COMPACT_WINDOW,
+        resolve_auto_compact_window,
+    )
+
+    settings = _launcher_settings()  # model="nvidia_nim/test-model"
+
+    assert resolve_auto_compact_window(settings) == CLAUDE_CODE_AUTO_COMPACT_WINDOW
+
+
+def test_resolve_auto_compact_window_uses_lmstudio_loaded_context(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from cli.launchers.claude import resolve_auto_compact_window
+
+    settings = Settings.model_construct(
+        host="0.0.0.0",
+        port=8082,
+        anthropic_auth_token="freecc",
+        model="lmstudio/mistralai/devstral-small-2-2512",
+        lm_studio_base_url="http://localhost:1234/v1",
+    )
+
+    class _FakeResponse:
+        def raise_for_status(self) -> None:
+            return None
+
+        def json(self) -> dict:
+            return {
+                "data": [
+                    {"state": "loaded", "loaded_context_length": 40960},
+                    {"state": "not-loaded", "loaded_context_length": 999999},
+                ]
+            }
+
+    def _fake_get(url: str, timeout: float) -> _FakeResponse:
+        assert url == "http://localhost:1234/api/v0/models"
+        return _FakeResponse()
+
+    monkeypatch.setattr("cli.launchers.claude.httpx.get", _fake_get)
+
+    # max(8192, min(0.85 * 40960, 40960 - 12000)) == 28960
+    assert resolve_auto_compact_window(settings) == "28960"
+
+
+def test_resolve_auto_compact_window_fails_open_on_lookup_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from cli.launchers.claude import (
+        CLAUDE_CODE_AUTO_COMPACT_WINDOW,
+        resolve_auto_compact_window,
+    )
+
+    settings = Settings.model_construct(
+        host="0.0.0.0",
+        port=8082,
+        anthropic_auth_token="freecc",
+        model="lmstudio/mistralai/devstral-small-2-2512",
+        lm_studio_base_url="http://localhost:1234/v1",
+    )
+
+    def _raise(*_args: object, **_kwargs: object):
+        raise OSError("connection refused")
+
+    monkeypatch.setattr("cli.launchers.claude.httpx.get", _raise)
+
+    assert resolve_auto_compact_window(settings) == CLAUDE_CODE_AUTO_COMPACT_WINDOW
+
+
 def test_launch_claude_passes_args_and_child_env(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
