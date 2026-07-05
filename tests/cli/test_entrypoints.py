@@ -480,6 +480,39 @@ def test_resolve_auto_compact_window_uses_lmstudio_loaded_context(
     assert resolve_auto_compact_window(settings) == "28960"
 
 
+def test_resolve_auto_compact_window_clamps_to_a_small_loaded_context(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A model loaded with a context smaller than the 8192 floor must not get
+    a window that exceeds its actual ceiling — otherwise Claude Code still
+    won't compact before LM Studio silently truncates the stream."""
+    from cli.launchers.claude import resolve_auto_compact_window
+
+    settings = Settings.model_construct(
+        host="0.0.0.0",
+        port=8082,
+        anthropic_auth_token="freecc",
+        model="lmstudio/mistralai/devstral-small-2-2512",
+        lm_studio_base_url="http://localhost:1234/v1",
+    )
+
+    class _FakeResponse:
+        def raise_for_status(self) -> None:
+            return None
+
+        def json(self) -> dict:
+            return {"data": [{"state": "loaded", "loaded_context_length": 4096}]}
+
+    def _fake_get(url: str, timeout: float) -> _FakeResponse:
+        return _FakeResponse()
+
+    monkeypatch.setattr("cli.launchers.claude.httpx.get", _fake_get)
+
+    # Without the clamp: max(8192, min(0.85*4096, 4096-12000)) == 8192, which
+    # exceeds the real 4096-token ceiling. With it: min(8192, 4096) == 4096.
+    assert resolve_auto_compact_window(settings) == "4096"
+
+
 def test_resolve_auto_compact_window_fails_open_on_lookup_error(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

@@ -121,6 +121,12 @@ def resolve_auto_compact_window(settings: Settings) -> str:
             return CLAUDE_CODE_AUTO_COMPACT_WINDOW
         context_length = max(loaded)
         window = max(8192, min(int(context_length * 0.85), context_length - 12000))
+        # The 8192 floor above is meant to avoid compacting too early on modest
+        # contexts, not to override a model loaded with an even smaller context
+        # than that. Clamp to context_length so the window can never exceed the
+        # actual ceiling — otherwise Claude Code still wouldn't compact before
+        # LM Studio silently truncates the stream.
+        window = min(window, context_length)
         return str(window)
     except Exception:
         return CLAUDE_CODE_AUTO_COMPACT_WINDOW
