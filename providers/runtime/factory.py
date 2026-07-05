@@ -133,6 +133,18 @@ def _create_cerebras(config: ProviderConfig, _settings: Settings) -> BaseProvide
     return CerebrasProvider(config)
 
 
+def _create_kiro(config: ProviderConfig, settings: Settings) -> BaseProvider:
+    from providers.kiro import KiroProvider
+
+    return KiroProvider(config, settings=settings)
+
+
+def _create_default_combo(config: ProviderConfig, settings: Settings) -> BaseProvider:
+    from providers.default_combo import DefaultComboProvider
+
+    return DefaultComboProvider(config, settings=settings)
+
+
 PROVIDER_FACTORIES: dict[str, ProviderFactory] = {
     "nvidia_nim": _create_nvidia_nim,
     "open_router": _create_open_router,
@@ -147,6 +159,8 @@ PROVIDER_FACTORIES: dict[str, ProviderFactory] = {
     "minimax": _create_minimax,
     "cerebras": _create_cerebras,
     "groq": _create_groq,
+    "kiro": _create_kiro,
+    "default_combo": _create_default_combo,
     "fireworks": _create_fireworks,
     "cloudflare": _create_cloudflare,
     "zai": _create_zai,
