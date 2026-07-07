@@ -75,7 +75,7 @@ Free Claude Code routes Anthropic Messages API traffic from Claude Code (CLI and
 macOS/Linux:
 
 ```bash
-curl -fsSL "https://github.com/Alishahryar1/free-claude-code/blob/main/scripts/install.sh?raw=1" | sh
+curl -fsSL "https://github.com/Alishahryar1/free-claude-code/blob/main/scripts/install.sh?raw=1" | sudo sh
 ```
 
 Windows PowerShell:
